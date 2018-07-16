@@ -1,6 +1,6 @@
 # Django, PostgreSQL on Kubernetes (GKE)
 
-This tutorial should help to deploy a django application on a Kubernetes Cluster. Before starting this tutorial, the user is expected to have basic knowledge of GKE, Django, Docker and docker-compose.
+This tutorial should help to deploy a django application on a Kubernetes Cluster. Before starting this tutorial, the user is expected to have basic knowledge of GKE, Django, PostgreSQL and Docker
 
 ## Understanding Kubernetes
 
@@ -10,7 +10,7 @@ Before we jump into the tutorial, lets have a basic understanding of what kubern
 
 **Kubernetes**, at its basic level, is a system for running & co-ordinating containerized applications across a cluster of machines. It is a platform designed to completely manage the life cycle of containerized applications and services using methods that provide predictability, scalability, and high availability.
 
-To know more about kubernetes, visit [here](./understanding-kubernetes.md)
+To know more about kubernetes, visit [here](https://www.digitalocean.com/community/tutorials/an-introduction-to-kubernetes)
 
 Moving on, as a part of this tutorial we'll be deploying Polls API, from [here](https://www.github.com/yvsssantosh/django-polls-rest)
 
@@ -32,6 +32,12 @@ mkvirtualenv pollsapi
 # Installing current project requirements
 pip install -r requirements.txt
 
+# Connect to postgres
+export POSTGRES_USER=pollsdb
+export POSTGRES_DB=polls_admin
+export POSTGRES_PASSWORD=polls_password
+export POLLSAPI_PG_HOST=127.0.0.1
+
 # Running migrations
 python manage.py migrate
 
@@ -43,7 +49,7 @@ Now that we have tested on local server, lets create a new kubernetes cluster an
 
 ### Setting up Google Cloud SDK
 
-For instructions to setup Google Cloud SDK navigate to https://cloud.google.com/sdk and choose the OS for which you want to set it up.
+For instructions to setup Google Cloud SDK navigate to https://cloud.google.com/sdk
 
 Read the installation instructions and setup accordingly. Once done, check the installation status by running the command
 ```
@@ -53,9 +59,9 @@ It should show an output similar to this:
 
 ![](./images/check_installation.png)
 
-### Setting up kubectl command lime
+### Setting up kubectl command line
 
-To manage and maintain a kubernetes cluster from our desktop/laptop we need to setup kubectl command line. It can be done simply by using the command
+To manage and maintain a kubernetes cluster from our desktop/laptop we need to setup kubectl command line. It can be done using the command
 
 ```
 gcloud components install kubectl
@@ -72,7 +78,7 @@ Then click on Kubernetes Engine from the navigate menu which would result in the
 
 ![](./images/before_creation.png)
 
-Create a new cluster based on your requirement. I've created a cluster based on the following settings
+Create a new cluster. I've created a cluster based on the following settings
 ```
 Cluster name        :   pollsapi
 Location            :   Zonal
@@ -104,19 +110,43 @@ Once connected run the command `kubectl get all`.
 
 ![](./images/kubectl_success.png)
 
-This shows that our cluster is up and running.
+Now that the cluster is up and running, lets package our application into a containerized one using docker.
 
-Now the the cluster is created and connected sucessfully, lets package our application into a containerized one using docker.
+### Setting up Google Container Registry using Docker
 
-### Setting up PostgreSQL
-
-Before we setup PostgreSQL, for simpler understanding lets create a namespace `databases`
+Configuring docker with gcloud:
+```sh
+gcloud auth config-docker
 ```
-kubectl create namespace databases
-```
-This command is totally optional, but I prefer this because, I place all the databases I create come under a single namespace so that they'll be easy to access.
+![](./images/docker_configure.png)
 
-The simplest way of setting up PostgreSQL on kubernetes is with the help of `Helm Package Manager`. To install helm on kubernetes see [here](https://github.com/kubernetes/helm)
+Once docker is configured, we are ready to build the image.
+
+```sh
+# Build the image
+# Common format to push an image to google container registry is gcr.io/$PROJECT_ID/$IMAGE_NAME:$TAG
+
+export PROJECT_ID=YOUR_PROJECT_ID_HERE
+export IMAGE_NAME=YOUR_IMAGE_NAME_HERE
+export TAG=YOUR_IMAGE_TAG (optional, default is `latest`)
+
+# In my case, giving the tag as v1.0.0 (default is latest)
+docker build -t gcr.io/test-gcp-208915/pollsapi:v1.0.0 . 
+# (Note the . in the end)
+
+# Push the image
+docker push gcr.io/test-gcp-208915/pollsapi:v1.0.0
+```
+
+Once the image has been pushed, paste the push URL in browser. It will ask you to sign in into google account which has been used to configure this cluster (if not already signed in).
+
+![](./images/docker_success_push.png)
+
+Since our image has been uploaded sucessfully, we need to setup the database next.
+
+### Setting up Helm Package Manager
+
+The simplest way of setting up PostgreSQL on kubernetes is with the help of [Helm Package Manager](https://github.com/kubernetes/helm)
 
 For mac users, the command to install helm (using brew) is:
 ```sh
@@ -127,16 +157,7 @@ brew install kubernetes-helm
 helm init
 ```
 
-Once helm is setup sucessfully, run the command
-
-```sh
-# Default command, with Persistent volume claim, and in namespace databases
-helm install --name pollsdb stable/postgresql --namespace databases
-
-# If user wishes not to have a separate namespace then just ignore the last two words
-# i.e. --namespace databases
-```
-* `Note`: Often, for first time users, this might generate an error saying that tiller doesn't have access permissions to create clusterrolebinding. This usually happens if the user logged inside Google Cloud SDK doesn't have access to create Cluster Role Bindings (which is usually available only for administrators)
+* `Note`: Often during package installation i.e., `helm install --name MY_RELEASE stable/PACKAGE_NAME` a common error is generated explaining tiller not having access to create cluster role bindings. This usually happens if the user logged inside Google Cloud SDK doesn't have proper access to create role bindings or issues with helm installation.
 
 If that error occurs, then run the following commands:
 
@@ -184,43 +205,107 @@ Once this is sucessfully done, initialize helm using
 helm init --service-account tiller
 ```
 
-And run the [command](https://generate-permalink-and-paste-here) to install Postgresql in our cluster
+And then run the command to install Postgresql in our cluster, as previously mentioned.
 
-* `Note`: Once the database is setup, make sure to take the password
+### Setting up PostgreSQL
+
+Before we setup PostgreSQL, lets create a namespace `databases`
+```sh
+# Why create namespace databases?
+# This command is totally optional, but this is prefered this because I place all the 
+# databases created in a single namespace so that they'll be easy to access.
+kubectl create namespace databases
+
+# Before creating PostgreSQL using helm, lets understand few basics.
+
+# Default command of creation enables Persistent Volume Claim (PVC)
+# Instead of default postgres username, we are setting custom user.
+# So replace YOUR_POSTGRES_USER with desired username, in my case polls_admin &
+# MY_RELEASE_NAME, which in my case is pollsdb &
+# MY_DATABASE_NAME, which in my case is pollsdb
+
+# helm install --name MY_RELEASE_NAME stable/postgresql --set postgresUser=YOUR_POSTGRES_USER,postgresDatabase=MY_DATABASE_NAME --namespace databases
+
+helm install --name pollsdb stable/postgresql --set postgresUser=polls_admin,postgresDatabase=pollsdb --namespace databases
+
+# If user wishes not to have a separate namespace then just ignore the last two words
+# i.e. --namespace databases
+```
+For more options on customizing postgres with custom parameters, see [here](https://github.com/kubernetes/charts/tree/master/stable/postgresql)
+
+![](./images/postgres_success.png)
+**DO NOT FORGET to take a note of PGPASSWORD as seen in the NOTES section (above image) once postgres has been created**
+
+```sh
+# Saving password of PostgreSQL into environemt varialble $PGPASSWORD
+PGPASSWORD=$(kubectl get secret --namespace databases pollsdb-postgresql -o jsonpath="{.data.postgres-password}" | base64 --decode; echo)
+
+# Why save the password?
+# Since we have created a separate namespace for databases, secrets from one namespaces cannot be accessed from another
+# So in order to access the postgres password in the default namespace, we must create a new secret
+# Let's first convert our password into base64 encoding.
+
+echo -n $PGPASSWORD | base64
+
+# MUST DO : Copy the generated value and replace it with `YOUR_ENCODED_PASSWORD` in the `polls-password-secret.yml`. Then create the secret.
+
+kubectl create -f pollsdb-password-secret.yml
+
+# Now that the secret has been setup, lets migrate the data.
+kubectl create -f polls-migration.yml
+
+# Wait for a minute and check the status of the migration using folling commands.
+kubectl get jobs
+
+# In order to check the logs, identify the pod running the pod running migration.
+kubectl get pods --show-all
+
+# Check the logs of the pod
+# kubectl logs POD_NAME
+kubectl logs polls-migration-5tf8z
+
+# Since the jobs have passed, there is no need for them to exist.
+# We can just delete the jobs using
+kubectl delete -f polls-migration.yml
+
+```
+
+![](./images/migration_success.png)
+
 
 ### Setting up Django Application
 
-Configuring docker with gcloud:
+Now that we have the database ready with migrations, lets start our application.
 ```sh
-gcloud auth config-docker
+# Start application
+kubectl create -f pollsapi.yml
 ```
-![](./images/docker_configure.png)
+![](./images/creating_api.png)
 
-Once docker is configured, we are ready to build the image.
+Note that the external IP is not pointing to anything. Which means we still cannot access the application outside in our web-browser. Lets create an Ingress to expose our application.
+
+### Exposing our Application
+
+Lets create an Ingress to expose our application.
 
 ```sh
-# Build the image
-# Common format to push an image to google container registry is gcr.io/$PROJECT_ID/$IMAGE_NAME
-
-export PROJECT_ID=YOUR_PROJECT_ID_HERE
-export IMAGE_NAME=YOUR_IMAGE_NAME_HERE
-
-# In my case, giving the tag as v1.0.0 (default is latest)
-docker build -t gcr.io/test-gcp-208915/pollsapi:v1.0.0 . 
-# (Note the . in the end)
-
-# Push the image
-docker push gcr.io/test-gcp-208915/pollsapi:v1.0.0
+kubectl create -f pollsapi-ingress.yml
 ```
 
-Once the image has been pushed, paste the push URL in browser. It will ask you to sign in into google account (if not already signed in).
+Note that creating an ingress may take atleast `10 minutes`, or sometimes even more.
+Please be patient while an ingress is being created
 
-![](./images/docker_success_push.png)
+To check the status of the ingress, see below
+![](./images/ingress_success.png)
 
-Now that we have the container image ready, and the database up and running, lets write kubernetes scripts to:
-1. Perform migrations
-2. Run the application server
-3. Expose the application to real world using ingress
+As observed, it took almost `10 minutes` for the ingress to setup properly.
+On navigating to the ingress address generated for me i.e. http://35.227.205.45/
 
-#### Perform Migrations
+![](./images/setup_success.png)
 
+### Documentation for Polls API
+![](./images/api_docs.png)
+
+```
+For any queries, please create an issue.
+```
