@@ -273,16 +273,104 @@ kubectl delete -f polls-migration.yml
 ![](./images/migration_success.png)
 
 
+### Serving Static Files
+
+Now that we have the database up and running with our migrations, lets setup our static files. Rather than setting up a separate NGINX server to serve static files, it'd be much simpler, secure & faster to use Google Cloud Storage as a provider to serve static files.
+
+Let's first create a bucket in Google Cloud Storage. Visit <https://console.cloud.google.com/storage>
+
+`Make sure to the check if the right project is selected.`
+
+I've created a bucket using the following settings:
+
+```
+Name of Bucket          :   pollsapi-storage
+Default Storage Class   :   Regional
+Location                :   asia-south1 (Closest to my location)
+```
+
+![](./images/creating_bucket.png)
+
+Once the bucket is created, navigate to the settings icon as shown below
+
+![](./images/settings_navbar.png)
+
+In the interoperability tab, create a new key. This key is required to let our django application send static files to our bucket.
+
+![](./images/interoperability_key.png)
+
+Now that we have ACCESS_KEY, ACCESS_SECRET and BUCKET_NAME, lets create a secrets file in kubernetes, so that we can directly use these as environment variables in our django application.
+
+```sh
+# Lets first encode our secrets into base64 format
+
+echo -n 'YOUR_SECRET_ACCESS_KEY_ID_HERE' | base64
+
+## Repeat the same for SECRET_ACCESS_KEY and BUCKET_NAME
+```
+Once we have the three generated values, replace them in `cloud-storage-secrets.yml`. After replacing the values with appropriate ones, lets create our secret in kubernetes.
+
+```sh
+# Creating cloud storage secret
+
+kubectl create -f cloud-storage-secrets.yml
+```
+Now that the secrets are setup sucessfully, lets run the Job `polls-collect-static.yml` in order to collect static files.
+
+```sh
+kubectl create -f polls-collect-static.yml
+
+# Note : It will take some time to collect the static files, as they are being uploaded
+# to our bucket from the batch job which we created just now. 
+# We can just check the status of static files by either checking the logs
+# or by checking the job status itself
+```
+![](./images/collect_static_success.png)
+![](./images/collect_static_job_status.png)
+
+We have sucessfully setup static files in our application. But the major question is:
+
+`How are the static files being served?`
+
+To answer that question, lets see a small code snippet below
+
+```py
+# First, the packages Boto & Django Storages are required. Lets install them
+# These packages help us to connect to Google Cloud Storage
+pip install boto django-storages
+
+# Check the following snippet now (from settings.py file under the STATIC_FILES_SETTINGS)
+DEFAULT_FILE_STORAGE = 'storages.backends.gs.GSBotoStorage'
+STATICFILES_STORAGE = 'storages.backends.gs.GSBotoStorage'
+
+GS_ACCESS_KEY_ID = os.environ.get('GS_ACCESS_KEY_ID', None)
+GS_SECRET_ACCESS_KEY = os.environ.get('GS_SECRET_ACCESS_KEY', None)
+GS_BUCKET_NAME = os.environ.get('GS_BUCKET_NAME', None)
+
+# Here we are configuring Google Cloud Storage as our default storage provider.
+# So whenever we run python manage.py collectstatic, all the static files
+# will be uploaded/updated in our Google Cloud Storage.
+# This also makes sure that all the static files (when required), will be served
+# from the location specified.
+
+# GS_ACCESS_KEY_ID, GS_SECRET_ACCESS_KEY and GS_BUCKET_NAME are the environment
+# variables which were created in `cloud-storage-secrets.yml` and are passed to our 
+# application when the yaml file has been created.
+```
 ### Setting up Django Application
 
-Now that we have the database ready with migrations, lets start our application.
+Now that we have the database ready with migrations, collected staticfiles, lets start our application.
+
 ```sh
 # Start application
 kubectl create -f pollsapi.yml
 ```
 ![](./images/creating_api.png)
 
-Note that the external IP is not pointing to anything. Which means we still cannot access the application outside in our web-browser. Lets create an Ingress to expose our application.
+`Note: `
+1. Usually, we run the server using `python manage.py runserver`. This is `NOT RECOMMENDED` for production purposes because of security concerns and extra memory usage. More on this can be found [here](https://docs.djangoproject.com/en/2.0/howto/deployment/wsgi/gunicorn/) Keeping that in mind, this tutorial uses `gunicorn` server to run the application.
+
+2. The service type is NodePort for our application, which means that we'll be able to access our application once we expose it using an Ingress.
 
 ### Exposing our Application
 
@@ -292,14 +380,13 @@ Lets create an Ingress to expose our application.
 kubectl create -f pollsapi-ingress.yml
 ```
 
-Note that creating an ingress may take atleast `10 minutes`, or sometimes even more.
-Please be patient while an ingress is being created
+`Note that creating an ingress may take atleast 5 minutes, or sometimes even more. Please be patient while an ingress is being created`
 
 To check the status of the ingress, see below
 ![](./images/ingress_success.png)
 
-As observed, it took almost `10 minutes` for the ingress to setup properly.
-On navigating to the ingress address generated for me i.e. http://35.227.205.45/
+As expected, it took around `10 minutes` for the ingress to setup properly.
+Navigate to the ingress address generated i.e. http://35.241.42.232/ in order to access our application.
 
 ![](./images/setup_success.png)
 
