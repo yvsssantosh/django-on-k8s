@@ -393,6 +393,8 @@ Navigate to the ingress address generated i.e. http://35.241.42.232/ in order to
 ### Documentation for Polls API
 ![](./images/api_docs.png)
 
+
+Once this is done, let's setup CI & CD for this project starting [here](https://gitlab.com/yvsssantosh/django-gitlab-ci/)
 ```
 For any queries, please create an issue.
 ```
